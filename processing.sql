@@ -211,7 +211,7 @@ BEGIN
             EXECUTE ('select count(*) from '||_proc) into _counter;
             _inserts_made := _counter - _check;
             RAISE NOTICE 'Attached *|1:* links - % inserts made.',_inserts_made;
-            _combined := _combined + _inserts_made;
+            _combined := _inserts_made;
             EXECUTE ('select count(*) from '||_proc) into _check;
             
             -- The following queries handle many:1 links. In most cases this would be a side stream joining a main stream. We need to identify the main stream and attach the new link accordingly.
