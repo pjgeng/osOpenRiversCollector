@@ -14,6 +14,8 @@ The script provides constant updates in the form of messages being printed to th
 
 The script produces a clean and stripped down dataset containing only the named GB watercourses. Where multiple watercourses exist with the same name (e.g. River Avon) each unique river is provided with a unique identifier. The script does NOT geolocate these further than their contained geometry. the script does calculate the length within the database. This could be used to differentiate between different rivers of the same name if one is significantly longer than the other. The value is merely the combined length of all links in the geometry and as such is not 100% accurate.
 
+At present this script only uses the name1 field of the data to determine streams and name these. This causes issues in Wales and Scotland where some streams are named under their Welsh and Gaelic names under name1 and only provide the English names under name2. This results in the River Severn only showing up under its Welsh name of Afon Hafren. The script is being changed to account for this, though in the meantime it could be run twice, once using name1 and once replacing all references to name1 with name2. This would result in two independent datasets of uniquely named streams.
+
 The script automatically fills in unnamed gaps between named links starting from the source and working its way downstream to the outflow. There are some anomalies that need manual fixing, especially on the River Thames, Humber and Severn, though these may well disappear or change based on the input data currency.
 
-The script is provided unsupported and as-is in line with the license, with no future public updates planned. Commercial support options may be available on request.
+The script is provided unsupported and as-is in line with the license, with no future public updates planned (except for multi name support). Commercial support options may be available on request.
