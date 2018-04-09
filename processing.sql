@@ -6,7 +6,7 @@ DECLARE
 _fresh int := 1; -- Is this a fresh run of the processing or a re-run using previously processed data. NOTE: Setting this to 0 is currently not fully tested.
 _clean int := 1; -- Should tables created for the processing be cleaned up afterwards. This removes all intermediate data, leaving only the start data and final result.
 _run int := 1; -- If set to 0 only the initial setup will run. Very useful when debugging queries or wanting to fine tune performance.
-_schema text := 'test'; -- The schema name to be used. The executing user would already be connected to a relevant database before running the processing.
+_schema text := 'openrivers'; -- The schema name to be used. The executing user would already be connected to a relevant database before running the processing.
 _proc_table text := 'rivers'; -- Name to use for the processing table. Will be removed on completion if "clean" is set to 1.
 _nodes_table text := 'hydronode'; -- Table name of the OS OpenRivers Hydronode table. hnsub for testing.
 _links_table text := 'watercourselink'; -- Table name of the OS OpenRivers Watercourselink table. wcsub for testing.
