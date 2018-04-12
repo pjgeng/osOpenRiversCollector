@@ -34,7 +34,7 @@ BEGIN
         
         EXECUTE ('DROP TABLE IF EXISTS '||_proc); -- Remove the old processing table if it exists.
         -- Create the processing table as a fresh table including adding the relevant geometry entries.
-        EXECUTE ('CREATE TABLE '||_proc||' (gid serial, "name1" varchar(250), "link" varchar(38), "identifier" varchar(38), "startnode" varchar(38), "endnode" varchar(38), "length" int)');
+        EXECUTE ('CREATE TABLE '||_proc||' (gid serial, "name1" varchar(250), "name2" varchar(250), "link" varchar(38), "identifier" varchar(38), "startnode" varchar(38), "endnode" varchar(38), "length" int)');
         PERFORM AddGeometryColumn(_schema,_proc_table,'geom','0','MULTILINESTRING',4);
         PERFORM UpdateGeometrySRID(_schema,_proc_table,'geom',27700);
     
@@ -83,11 +83,13 @@ BEGIN
     IF FOUND THEN
         Drop table pg_temp.names;
     END IF;
-    create temporary table pg_temp.names (identifier varchar(38), name1 varchar(250));
-    EXECUTE ('insert into pg_temp.names (identifier, name1) select identifier, name1 from '||_proc||' where name1 is not null and name1 != '''' ');
+    create temporary table pg_temp.names (identifier varchar(38), name1 varchar(250), name2 varchar(250));
+    EXECUTE ('insert into pg_temp.names (identifier, name1, name2) select identifier, name1, name2 from '||_proc||' where name1 is not null and name1 != '''' ');
     DROP INDEX IF EXISTS pg_temp.n_name1;
+    DROP INDEX IF EXISTS pg_temp.n_name2;
     DROP INDEX IF EXISTS pg_temp.n_identifier;
     CREATE INDEX n_name1 on pg_temp.names (name1);
+    CREATE INDEX n_name2 on pg_temp.names (name2);
     CREATE INDEX n_identifier on pg_temp.names (identifier);
     
     perform n.nspname ,c.relname FROM pg_catalog.pg_class c LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace where n.nspname like 'pg_temp_%' AND pg_catalog.pg_table_is_visible(c.oid) AND Upper(relname) = Upper('lengths');
@@ -126,8 +128,9 @@ BEGIN
         perform 1 from pg_temp.names where identifier = NEW.identifier;
         IF FOUND THEN
             UPDATE pg_temp.names set name1 = NEW.name1 where identifier = NEW.identifier and name1 IS DISTINCT FROM NEW.name1 and (name1 = '' or name1 IS NULL) and (NEW.name1 != '' and NEW.name1 is not null);
+            UPDATE pg_temp.names set name2 = NEW.name2 where identifier = NEW.identifier and name2 IS DISTINCT FROM NEW.name2 and (name2 = '' or name2 IS NULL) and (NEW.name2 != '' and NEW.name2 is not null);
         ELSE
-            INSERT INTO pg_temp.names(identifier,name1) VALUES(NEW.identifier,NEW.name1);
+            INSERT INTO pg_temp.names(identifier,name1,name2) VALUES(NEW.identifier,NEW.name1,NEW.name2);
         END IF;
         perform 1 from pg_temp.lengths where identifier = NEW.identifier;
         IF FOUND THEN
@@ -150,7 +153,7 @@ BEGIN
     
     IF _run = 1 THEN
     
-        EXECUTE ('insert into '||_proc||' (name1, link, identifier, startnode, endnode, length, geom) select w.name1,w.identifier,w.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_nodes||' h where h.starts >= 1 and h.ends = 0 and w.startnode = h.identifier and not exists (select identifier from '||_proc||' ri where ri.identifier = w.identifier)'); -- The first batch of data is inserted. Effectively, any links connected to nodes that exclusively START links but do NOT END any.
+        EXECUTE ('insert into '||_proc||' (name1, name2, link, identifier, startnode, endnode, length, geom) select w.name1,w.name2,w.identifier,w.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_nodes||' h where h.starts >= 1 and h.ends = 0 and w.startnode = h.identifier and not exists (select identifier from '||_proc||' ri where ri.identifier = w.identifier)'); -- The first batch of data is inserted. Effectively, any links connected to nodes that exclusively START links but do NOT END any.
         
         -- From this point onwards the processing will use "live" streams only. A live stream is represented by any node that has all END connections attached, but not all START links are present. By default this results in a downstream motion of the processing, halting further processing until all merging streams are attached before continuing on a node.
         
@@ -167,10 +170,10 @@ BEGIN
                 EXECUTE ('select count(*) from '||_proc) into _subcheck;
                 
                 -- The first statement will attach 1:1 links using the correct name if a corresponding upstream name exists in the temporary tables.
-                EXECUTE ('insert into '||_proc||' (name1, link, identifier, startnode, endnode, length, geom) select distinct w.name1,w.identifier,r.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, '||_nodes||' h where not exists (select 1 from '||_proc||' where link = w.identifier) and w.startnode = h.identifier and h.starts = 1 and h.ends = 1 and r.endnode = w.startnode and exists (select n.name1 from pg_temp.names n where n.identifier = r.identifier and ((n.name1 IS NOT DISTINCT FROM w.name1) or (n.name1 IS DISTINCT FROM w.name1 and ((n.name1 = '''' or n.name1 IS NULL) or (w.name1 = '''' or w.name1 IS NULL)))))');
+                EXECUTE ('insert into '||_proc||' (name1, name2, link, identifier, startnode, endnode, length, geom) select distinct w.name1,w.name2,w.identifier,r.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, '||_nodes||' h where not exists (select 1 from '||_proc||' where link = w.identifier) and w.startnode = h.identifier and h.starts = 1 and h.ends = 1 and r.endnode = w.startnode and exists (select n.name1 from pg_temp.names n where n.identifier = r.identifier and ((n.name1 IS NOT DISTINCT FROM w.name1) or (n.name1 IS DISTINCT FROM w.name1 and ((n.name1 = '''' or n.name1 IS NULL) or (w.name1 = '''' or w.name1 IS NULL)))))');
                 
                 -- The second statement will attach any remaining 1:1 links that have not got a corresponding upstream name.
-                EXECUTE ('insert into '||_proc||' (name1, link, identifier, startnode, endnode, length, geom) select distinct w.name1,w.identifier,w.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, '||_nodes||' h where not exists (select 1 from '||_proc||' where link = w.identifier) and w.startnode = h.identifier and h.starts = 1 and h.ends = 1 and r.endnode = w.startnode and not exists (select n.name1 from pg_temp.names n where n.identifier = r.identifier and ((n.name1 IS NOT DISTINCT FROM w.name1) or (n.name1 IS DISTINCT FROM w.name1 and ((n.name1 = '''' or n.name1 IS NULL) or (w.name1 = '''' or w.name1 IS NULL)))))');
+                EXECUTE ('insert into '||_proc||' (name1, name2, link, identifier, startnode, endnode, length, geom) select distinct w.name1,w.name2,w.identifier,w.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, '||_nodes||' h where not exists (select 1 from '||_proc||' where link = w.identifier) and w.startnode = h.identifier and h.starts = 1 and h.ends = 1 and r.endnode = w.startnode and not exists (select n.name1 from pg_temp.names n where n.identifier = r.identifier and ((n.name1 IS NOT DISTINCT FROM w.name1) or (n.name1 IS DISTINCT FROM w.name1 and ((n.name1 = '''' or n.name1 IS NULL) or (w.name1 = '''' or w.name1 IS NULL)))))');
                 
                 -- It is reasonably assumed that changes of names in streams are usually confined to mergers and forks. As a result there may be minor inaccuracies where these changes do occur.
                 
@@ -190,22 +193,22 @@ BEGIN
             EXECUTE ('INSERT INTO pg_temp.valid (identifier) select w.identifier from '||_links||' w, '||_proc||' r, '||_nodes||' h where not exists (select 1 from '||_proc||' where link = w.identifier) and w.startnode = h.identifier and h.starts > 1 and h.ends >= 1 and r.endnode = w.startnode and h.ends = (select count(endnode) from '||_proc||' where endnode = w.startnode group by endnode)');
             
             -- The initial query attaches named links to the accordingly named upstream link.
-            EXECUTE ('insert into '||_proc||' (name1, link, identifier, startnode, endnode, length, geom) select distinct w.name1,v.identifier,r.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, pg_temp.valid v where v.identifier = w.identifier and r.endnode = w.startnode and w.identifier = (select identifier from '||_links||' where startnode = w.startnode order by length desc limit 1) and exists (select n.name1 from pg_temp.names n where n.identifier = r.identifier and ((n.name1 IS NOT DISTINCT FROM w.name1) or (n.name1 IS DISTINCT FROM w.name1 and ((n.name1 = '''' or n.name1 IS NULL) or (w.name1 = '''' or w.name1 IS NULL)))))');
+            EXECUTE ('insert into '||_proc||' (name1, name2, link, identifier, startnode, endnode, length, geom) select distinct w.name1,w.name2,v.identifier,r.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, pg_temp.valid v where v.identifier = w.identifier and r.endnode = w.startnode and w.identifier = (select identifier from '||_links||' where startnode = w.startnode order by length desc limit 1) and exists (select n.name1 from pg_temp.names n where n.identifier = r.identifier and ((n.name1 IS NOT DISTINCT FROM w.name1) or (n.name1 IS DISTINCT FROM w.name1 and ((n.name1 = '''' or n.name1 IS NULL) or (w.name1 = '''' or w.name1 IS NULL)))))');
             
             EXECUTE ('DELETE FROM pg_temp.valid v USING '||_proc||' r where r.link = v.identifier');
             
             -- Where no relevant upstream name is identified the process adds the named link starting a new stream ID.
-            EXECUTE ('insert into '||_proc||' (name1, link, identifier, startnode, endnode, length, geom) select distinct w.name1,w.identifier,w.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, pg_temp.valid v where v.identifier = w.identifier and r.endnode = w.startnode and w.identifier = (select identifier from '||_links||' where startnode = w.startnode order by length desc limit 1) and not exists (select n.name1 from pg_temp.names n where n.identifier = r.identifier and ((n.name1 IS NOT DISTINCT FROM w.name1) or (n.name1 IS DISTINCT FROM w.name1 and ((n.name1 = '''' or n.name1 IS NULL) or (w.name1 = '''' or w.name1 IS NULL)))))');
+            EXECUTE ('insert into '||_proc||' (name1, name2, link, identifier, startnode, endnode, length, geom) select distinct w.name1,w.name2,w.identifier,w.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, pg_temp.valid v where v.identifier = w.identifier and r.endnode = w.startnode and w.identifier = (select identifier from '||_links||' where startnode = w.startnode order by length desc limit 1) and not exists (select n.name1 from pg_temp.names n where n.identifier = r.identifier and ((n.name1 IS NOT DISTINCT FROM w.name1) or (n.name1 IS DISTINCT FROM w.name1 and ((n.name1 = '''' or n.name1 IS NULL) or (w.name1 = '''' or w.name1 IS NULL)))))');
             
             EXECUTE ('DELETE FROM pg_temp.valid v USING '||_proc||' r where r.link = v.identifier');
             
             -- Unnamed links are added to the longest named upstream river.
-            EXECUTE ('insert into '||_proc||' (name1, link, identifier, startnode, endnode, length, geom) select distinct w.name1,w.identifier,r.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, pg_temp.valid v where v.identifier = w.identifier and r.endnode = w.startnode and w.name1 != '''' and w.name1 is not null and w.identifier != (select identifier from '||_links||' where startnode = w.startnode order by length desc limit 1) and exists (select n.name1 from pg_temp.names n where n.identifier = r.identifier and ((n.name1 IS NOT DISTINCT FROM w.name1) or (n.name1 IS DISTINCT FROM w.name1 and ((n.name1 = '''' or n.name1 IS NULL) or (w.name1 = '''' or w.name1 IS NULL)))))');
+            EXECUTE ('insert into '||_proc||' (name1, name2, link, identifier, startnode, endnode, length, geom) select distinct w.name1,w.name2,w.identifier,r.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, pg_temp.valid v where v.identifier = w.identifier and r.endnode = w.startnode and w.name1 != '''' and w.name1 is not null and w.identifier != (select identifier from '||_links||' where startnode = w.startnode order by length desc limit 1) and exists (select n.name1 from pg_temp.names n where n.identifier = r.identifier and ((n.name1 IS NOT DISTINCT FROM w.name1) or (n.name1 IS DISTINCT FROM w.name1 and ((n.name1 = '''' or n.name1 IS NULL) or (w.name1 = '''' or w.name1 IS NULL)))))');
             
             EXECUTE ('DELETE FROM pg_temp.valid v USING '||_proc||' r where r.link = v.identifier');
             
             -- All remaining links are attached starting new stream IDs.
-            EXECUTE ('insert into '||_proc||' (name1, link, identifier, startnode, endnode, length, geom) select distinct w.name1,w.identifier,w.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, pg_temp.valid v where v.identifier = w.identifier and r.endnode = w.startnode and w.name1 != '''' and w.name1 is not null and w.identifier != (select identifier from '||_links||' where startnode = w.startnode order by length desc limit 1) and not exists (select n.name1 from pg_temp.names n where n.identifier = r.identifier and ((n.name1 IS NOT DISTINCT FROM w.name1) or (n.name1 IS DISTINCT FROM w.name1 and ((n.name1 = '''' or n.name1 IS NULL) or (w.name1 = '''' or w.name1 IS NULL)))))');
+            EXECUTE ('insert into '||_proc||' (name1, name2, link, identifier, startnode, endnode, length, geom) select distinct w.name1,w.name2,w.identifier,w.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, pg_temp.valid v where v.identifier = w.identifier and r.endnode = w.startnode and w.name1 != '''' and w.name1 is not null and w.identifier != (select identifier from '||_links||' where startnode = w.startnode order by length desc limit 1) and not exists (select n.name1 from pg_temp.names n where n.identifier = r.identifier and ((n.name1 IS NOT DISTINCT FROM w.name1) or (n.name1 IS DISTINCT FROM w.name1 and ((n.name1 = '''' or n.name1 IS NULL) or (w.name1 = '''' or w.name1 IS NULL)))))');
             
             -- This concludes the 1(or many):many attachment for this processing round.
             EXECUTE ('select count(*) from '||_proc) into _counter;
@@ -220,7 +223,7 @@ BEGIN
             EXECUTE ('INSERT INTO pg_temp.valid (identifier) select w.identifier from '||_links||' w, '||_proc||' r, '||_nodes||' h where not exists (select 1 from '||_proc||' where link = w.identifier) and w.startnode = h.identifier and h.starts = 1 and h.ends > 1 and r.endnode = w.startnode and h.ends = (select count(endnode) from '||_proc||' where endnode = w.startnode group by endnode)');
             
             -- First we add all named links to the appropriately named upstream link where present.
-            EXECUTE ('insert into '||_proc||' (link, name1, identifier, startnode, endnode, length, geom) select distinct on (v.identifier) v.identifier,w.name1,r.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, pg_temp.valid v where r.endnode = w.startnode and v.identifier = w.identifier and (select count(name1) from '||_proc||' where name1 = w.name1 and w.name1 is not null and w.name1 != '''' group by name1) > 1 and r.identifier = (select l.identifier from (select identifier, endnode from '||_proc||') as links, pg_temp.lengths l, pg_temp.names n where l.identifier = links.identifier and n.identifier = links.identifier and links.endnode = w.startnode and (n.name1 IS NOT DISTINCT FROM w.name1 and n.name1 is not null and n.name1 != '''') order by total desc limit 1)');
+            EXECUTE ('insert into '||_proc||' (link, name1, name2, identifier, startnode, endnode, length, geom) select distinct on (v.identifier) v.identifier,w.name1,w.name2,r.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, pg_temp.valid v where r.endnode = w.startnode and v.identifier = w.identifier and (select count(name1) from '||_proc||' where name1 = w.name1 and w.name1 is not null and w.name1 != '''' group by name1) > 1 and r.identifier = (select l.identifier from (select identifier, endnode from '||_proc||') as links, pg_temp.lengths l, pg_temp.names n where l.identifier = links.identifier and n.identifier = links.identifier and links.endnode = w.startnode and (n.name1 IS NOT DISTINCT FROM w.name1 and n.name1 is not null and n.name1 != '''') order by total desc limit 1)');
             
             EXECUTE ('DELETE FROM pg_temp.valid v USING '||_proc||' r where r.link = v.identifier');
             
@@ -228,7 +231,7 @@ BEGIN
             EXECUTE ('insert into pg_temp.filter (identifier) select sub.id from (select distinct on (l.endnode) l.identifier as id, l.total from '||_proc||' r, pg_temp.lengths l, '||_links||' w, pg_temp.valid v, pg_temp.names n where l.identifier = r.identifier and r.endnode = w.startnode and n.identifier = r.identifier and (n.name1 != '''' and n.name1 is not null) and w.identifier = v.identifier order by l.endnode, l.total desc) as sub');
             
             -- Next, we attach unnamed links to the longest named upstream river.
-            EXECUTE ('insert into '||_proc||' (link, name1, identifier, startnode, endnode, length, geom) select distinct on (v.identifier) v.identifier,w.name1,r.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, pg_temp.valid v where r.endnode = w.startnode and v.identifier = w.identifier and r.identifier = (select l.identifier from (select identifier, endnode from '||_proc||') as links, pg_temp.lengths l, pg_temp.names n where l.identifier = links.identifier and n.identifier = links.identifier and links.endnode = w.startnode and (n.name1 IS DISTINCT FROM w.name1 and n.name1 is not null and n.name1 != '''') order by total desc limit 1)');
+            EXECUTE ('insert into '||_proc||' (link, name1, name2, identifier, startnode, endnode, length, geom) select distinct on (v.identifier) v.identifier,w.name1,w.name2,r.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, pg_temp.valid v where r.endnode = w.startnode and v.identifier = w.identifier and r.identifier = (select l.identifier from (select identifier, endnode from '||_proc||') as links, pg_temp.lengths l, pg_temp.names n where l.identifier = links.identifier and n.identifier = links.identifier and links.endnode = w.startnode and (n.name1 IS DISTINCT FROM w.name1 and n.name1 is not null and n.name1 != '''') order by total desc limit 1)');
             
             EXECUTE ('DELETE FROM pg_temp.valid v USING '||_proc||' r where r.link = v.identifier');
             
@@ -236,22 +239,22 @@ BEGIN
             EXECUTE ('insert into pg_temp.filter (identifier) select sub.id from (select distinct on (l.endnode) l.identifier as id, l.total from '||_proc||' r, pg_temp.lengths l, '||_links||' w, pg_temp.valid v where l.identifier = r.identifier and r.endnode = w.startnode and w.identifier = v.identifier order by l.endnode, l.total desc) as sub');
             
             -- Next, we attach unnamed links to the longest unnamed upstream river. 
-            EXECUTE ('insert into '||_proc||' (link, name1, identifier, startnode, endnode, length, geom) select distinct on (v.identifier) v.identifier,w.name1,r.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, pg_temp.valid v, pg_temp.names n where r.endnode = w.startnode and v.identifier = w.identifier and r.identifier in (select identifier from pg_temp.filter) and n.identifier = r.identifier and (w.name1 is null or w.name1 = '''') and (n.name1 is null or n.name1 = '''')');
+            EXECUTE ('insert into '||_proc||' (link, name1, name2, identifier, startnode, endnode, length, geom) select distinct on (v.identifier) v.identifier,w.name1,w.name2,r.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, pg_temp.valid v, pg_temp.names n where r.endnode = w.startnode and v.identifier = w.identifier and r.identifier in (select identifier from pg_temp.filter) and n.identifier = r.identifier and (w.name1 is null or w.name1 = '''') and (n.name1 is null or n.name1 = '''')');
             
             EXECUTE ('DELETE FROM pg_temp.valid v USING '||_proc||' r where r.link = v.identifier');
             
             -- Next, we attach named links to the longest identically named upstream link where there is more than one identically named upstream link.
-            EXECUTE ('insert into '||_proc||' (link, name1, identifier, startnode, endnode, length, geom) select distinct on (v.identifier) v.identifier,w.name1,r.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, pg_temp.valid v, pg_temp.names n where r.endnode = w.startnode and v.identifier = w.identifier and r.identifier in (select identifier from pg_temp.filter) and n.identifier = r.identifier and n.name1 = w.name1');
+            EXECUTE ('insert into '||_proc||' (link, name1, name2, identifier, startnode, endnode, length, geom) select distinct on (v.identifier) v.identifier,w.name1,w.name2,r.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, pg_temp.valid v, pg_temp.names n where r.endnode = w.startnode and v.identifier = w.identifier and r.identifier in (select identifier from pg_temp.filter) and n.identifier = r.identifier and n.name1 = w.name1');
             
             EXECUTE ('DELETE FROM pg_temp.valid v USING '||_proc||' r where r.link = v.identifier');
             
             -- Nearly there! Next, we attach any remaining named downstream links to the longest unnamed upstream link
-            EXECUTE ('insert into '||_proc||' (link, name1, identifier, startnode, endnode, length, geom) select distinct on (v.identifier) v.identifier,w.name1,r.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, pg_temp.valid v, pg_temp.names n where r.endnode = w.startnode and v.identifier = w.identifier and r.identifier in (select identifier from pg_temp.filter) and n.identifier = r.identifier and (w.name1 is not null or w.name1 != '''') and (n.name1 is null or n.name1 = '''')');
+            EXECUTE ('insert into '||_proc||' (link, name1, name2, identifier, startnode, endnode, length, geom) select distinct on (v.identifier) v.identifier,w.name1,w.name2,r.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_proc||' r, pg_temp.valid v, pg_temp.names n where r.endnode = w.startnode and v.identifier = w.identifier and r.identifier in (select identifier from pg_temp.filter) and n.identifier = r.identifier and (w.name1 is not null or w.name1 != '''') and (n.name1 is null or n.name1 = '''')');
             
             EXECUTE ('DELETE FROM pg_temp.valid v USING '||_proc||' r where r.link = v.identifier');
             
             -- Finally we add any remaining links, starting new river IDs.
-            EXECUTE ('insert into '||_proc||' (link, name1, identifier, startnode, endnode, length, geom) select distinct on (v.identifier) v.identifier,w.name1,w.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, pg_temp.valid v where v.identifier = w.identifier');
+            EXECUTE ('insert into '||_proc||' (link, name1, name2, identifier, startnode, endnode, length, geom) select distinct on (v.identifier) v.identifier,w.name1,w.name2,w.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, pg_temp.valid v where v.identifier = w.identifier');
             
             EXECUTE ('select count(*) from '||_proc) into _counter;
             _inserts_made := _counter - _check;
@@ -262,7 +265,7 @@ BEGIN
                 -- If no other branches are being attached we insert all links where more links are started than ended where the end count and start count have not been reached and as a result the links have not been processed yet. In effect this creates new start points while ensuring complex branches are attached without corrupting the existing IDs.
                 -- This is the reason we removed links earlier where start and end nodes were identical. While this is a way to handle slightly bigger versions of the same problem, the removed versions resulted in infinite loops within the processing.
                 EXECUTE ('select count(*) from '||_proc) into _check;
-                EXECUTE ('insert into '||_proc||' (link, name1, identifier, startnode, endnode, length, geom) select distinct on (w.identifier) w.identifier,w.name1,w.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_nodes||' h where h.starts > h.ends and w.startnode = h.identifier and not exists (select 1 from '||_proc||' where link = w.identifier)');
+                EXECUTE ('insert into '||_proc||' (link, name1, name2, identifier, startnode, endnode, length, geom) select distinct on (w.identifier) w.identifier,w.name1,w.name2,w.identifier,w.startnode,w.endnode,w.length,w.geom from '||_links||' w, '||_nodes||' h where h.starts > h.ends and w.startnode = h.identifier and not exists (select 1 from '||_proc||' where link = w.identifier)');
                 EXECUTE ('select count(*) from '||_proc) into _counter;
                 _inserts_made := _counter - _check;
                 
@@ -282,17 +285,19 @@ BEGIN
         
         -- As link names have not been changed in the previous steps to ensure consistency, we now update the link names to be consistent. While not strictly necessary for successful onward processing, this ensures the rivers resulting from any future merging are guaranteed to be named.
         EXECUTE ('UPDATE '||_proc||' set name1 = sub2.name1 FROM (select identifier, count(distinct name1) as c from '||_proc||' where name1 is not null and name1 != '''' group by identifier) as sub1, (select identifier, name1 from '||_proc||' where name1 is not null and name1 != '''' group by identifier, name1) as sub2 where sub1.identifier = sub2.identifier and sub1.c = 1 and '||_proc||'.identifier = sub1.identifier and '||_proc||'.identifier = sub2.identifier');  
+        EXECUTE ('UPDATE '||_proc||' set name2 = sub2.name2 FROM (select identifier, count(distinct name2) as c from '||_proc||' where name2 is not null and name2 != '''' group by identifier) as sub1, (select identifier, name2 from '||_proc||' where name2 is not null and name2 != '''' group by identifier, name2) as sub2 where sub1.identifier = sub2.identifier and sub1.c = 1 and '||_proc||'.identifier = sub1.identifier and '||_proc||'.identifier = sub2.identifier');  
         EXECUTE ('UPDATE '||_proc||' set name1 = sub2.name1 FROM (select sub.identifier, max(sub.c) as m from (select identifier, count(name1) as c from '||_proc||' where name1 is not null and name1 != '''' group by identifier) as sub, '||_proc||' where '||_proc||'.name1 is not null and '||_proc||'.name1 != '''' group by sub.identifier) as sub1,(select identifier, name1 from '||_proc||' where name1 is not null and name1 != '''' group by identifier, name1) as sub2 where sub1.identifier = sub2.identifier and '||_proc||'.identifier = sub1.identifier and '||_proc||'.identifier = sub2.identifier');
+        EXECUTE ('UPDATE '||_proc||' set name2 = sub2.name2 FROM (select sub.identifier, max(sub.c) as m from (select identifier, count(name2) as c from '||_proc||' where name2 is not null and name2 != '''' group by identifier) as sub, '||_proc||' where '||_proc||'.name2 is not null and '||_proc||'.name2 != '''' group by sub.identifier) as sub1,(select identifier, name2 from '||_proc||' where name2 is not null and name2 != '''' group by identifier, name2) as sub2 where sub1.identifier = sub2.identifier and '||_proc||'.identifier = sub1.identifier and '||_proc||'.identifier = sub2.identifier');
         
         RAISE NOTICE 'Names processed, joining data.';
         
         -- Now we merge streams by id, resulting in a cluster of named streams, though in places with different IDs despite identical names. This is a result of inconsistent naming in the source data and should only ever improve with subsequent source updates.
         EXECUTE ('DROP TABLE IF EXISTS '||_schema||'.inter');
-        EXECUTE ('CREATE TABLE '||_schema||'.inter (gid serial, "name1" varchar(250), "identifier" varchar(38), "length" int)');
+        EXECUTE ('CREATE TABLE '||_schema||'.inter (gid serial, "name1" varchar(250), "name2" varchar(250), "identifier" varchar(38), "length" int)');
         PERFORM AddGeometryColumn(_schema,'inter','geom','0','MULTILINESTRING',2);
         PERFORM UpdateGeometrySRID(_schema,'inter','geom',27700);
         
-        EXECUTE ('INSERT INTO '||_schema||'.inter (name1, identifier, length, geom) select name1, identifier, SUM(length), ST_Force_2D(ST_Multi(ST_Union(geom))) from '||_proc||' where name1 != '''' and name1 is not null group by identifier, name1');
+        EXECUTE ('INSERT INTO '||_schema||'.inter (name1, name2, identifier, length, geom) select name1, name2, identifier, SUM(length), ST_Force_2D(ST_Multi(ST_Union(geom))) from '||_proc||' where name1 != '''' and name1 is not null group by identifier, name1, name2');
         
         RAISE NOTICE 'Raw processed data joined, sanitising output.';
         
@@ -309,10 +314,10 @@ BEGIN
         EXECUTE ('Drop table if exists '||_schema||'.singlepol');
         EXECUTE ('Drop table if exists '||_out);
 
-        create temporary table pg_temp.collect1 (gid serial, name1 varchar(250), geom geometry);
-        create temporary table pg_temp.buffer1 (gid serial, name1 varchar(250), geom geometry);
-        EXECUTE ('create table '||_schema||'.singlepol (gid serial, name1 varchar(250))');
-        EXECUTE ('create table '||_out||' (gid serial, pid bigint, name1 varchar(250), length bigint)');
+        create temporary table pg_temp.collect1 (gid serial, name1 varchar(250), name2 varchar(250), geom geometry);
+        create temporary table pg_temp.buffer1 (gid serial, name1 varchar(250), name2 varchar(250), geom geometry);
+        EXECUTE ('create table '||_schema||'.singlepol (gid serial, name1 varchar(250), name2 varchar(250))');
+        EXECUTE ('create table '||_out||' (gid serial, pid bigint, name1 varchar(250), name2 varchar(250), length bigint)');
         
         PERFORM AddGeometryColumn(_schema,'singlepol','geom','0','Polygon',2);
         PERFORM UpdateGeometrySRID(_schema,'singlepol','geom',27700);
@@ -320,25 +325,31 @@ BEGIN
         PERFORM UpdateGeometrySRID(_schema,_out_table,'geom',27700);
         
         DROP INDEX IF EXISTS pg_temp.c1_name1;
+        DROP INDEX IF EXISTS pg_temp.c1_name2;
         DROP INDEX IF EXISTS pg_temp.b1_name1;
+        DROP INDEX IF EXISTS pg_temp.b1_name2;
         EXECUTE ('DROP INDEX IF EXISTS '||_schema||'.s1_name1');
+        EXECUTE ('DROP INDEX IF EXISTS '||_schema||'.s1_name2');
         CREATE INDEX c1_name1 on pg_temp.collect1 (name1);
+        CREATE INDEX c1_name2 on pg_temp.collect1 (name2);
         CREATE INDEX b1_name1 on pg_temp.buffer1 (name1);
+        CREATE INDEX b1_name2 on pg_temp.buffer1 (name2);
         EXECUTE ('CREATE INDEX s1_name1 on '||_schema||'.singlepol (name1)');
+        EXECUTE ('CREATE INDEX s1_name2 on '||_schema||'.singlepol (name2)');
 
-        EXECUTE ('insert into pg_temp.collect1 (name1, geom) select r1.name1, st_linemerge(st_union(r1.geom)) as geom from '||_schema||'.inter r1 group by r1.name1');
+        EXECUTE ('insert into pg_temp.collect1 (name1, name2, geom) select r1.name1, r1.name2, st_linemerge(st_union(r1.geom)) as geom from '||_schema||'.inter r1 group by r1.name1, r1.name2');
         
         -- The following two statements are used solely for debugging and make little sense in normal operation. Crucially the collections and buffer count must be equal before splitting named rivers off.
         -- select count(*) into _counter from pg_temp.collect1;
         -- RAISE NOTICE '% collections in table.',_counter;
         
-        EXECUTE ('insert into pg_temp.buffer1 (name1, geom) select r1.name1, st_buffer(r1.geom,'||_buffer_radius||') as geom from pg_temp.collect1 r1');
+        EXECUTE ('insert into pg_temp.buffer1 (name1, name2, geom) select r1.name1, r1.name2, st_buffer(r1.geom,'||_buffer_radius||') as geom from pg_temp.collect1 r1');
         
         -- The following two statements are used solely for debugging and make little sense in normal operation. Crucially the collections and buffer count must be equal before splitting named rivers off.
         -- select count(*) into _counter from pg_temp.buffer1;
         -- RAISE NOTICE '% buffers in table.',_counter;
         
-        EXECUTE ('insert into '||_schema||'.singlepol (name1, geom) select r1.name1, ST_GeometryN(r1.geom, generate_series(1, ST_NumGeometries(r1.geom))) AS geom from pg_temp.buffer1 r1');
+        EXECUTE ('insert into '||_schema||'.singlepol (name1, name2, geom) select r1.name1, r1.name2, ST_GeometryN(r1.geom, generate_series(1, ST_NumGeometries(r1.geom))) AS geom from pg_temp.buffer1 r1');
         
         -- These statements are commented as they are used solely for debugging. The count must be equal to the count raised in the final output notice.
         -- EXECUTE ('select count(*) from '||_schema||'.singlepol') into _counter;
@@ -349,7 +360,7 @@ BEGIN
         
         EXECUTE ('Update '||_schema||'.inter set pid = pol.pid from (select f.gid as fid, s.gid as pid from '||_schema||'.inter f, '||_schema||'.singlepol s where s.name1 = f.name1 and ST_Within(f.geom, s.geom)) as pol where pol.fid = '||_schema||'.inter.gid');
         
-        EXECUTE ('insert into '||_out||' (pid, name1, length, geom) select pid, name1, sum(length), st_union(geom) from '||_schema||'.inter group by pid, name1');
+        EXECUTE ('insert into '||_out||' (pid, name1,name2, length, geom) select pid, name1, name2, sum(length), st_union(geom) from '||_schema||'.inter group by pid, name1, name2');
         
         EXECUTE ('select count(*) from '||_out) into _counter;
         RAISE NOTICE 'Final output contains % individually named streams in the table.',_counter;
