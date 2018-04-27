@@ -18,4 +18,4 @@ The script handles name2 values. Since no watercourselink should ever have a nam
 
 The script automatically fills in unnamed gaps between named links starting from the source and working its way downstream to the outflow. There are some anomalies that need manual fixing, especially on the River Thames, Humber and Severn, though these may well disappear or change based on the input data currency.
 
-The script is provided unsupported and as-is in line with the license, with no future public updates planned (except for multi name support). Commercial support options may be available on request.
+The script is provided unsupported and as-is in line with the licence, with no future public updates planned (except for multi name support). Commercial support options may be available on request.
